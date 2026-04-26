@@ -5,6 +5,69 @@ const DEFAULT_MAP_WIDTH = 20;
 const DEFAULT_MAP_HEIGHT = 15;
 const MAX_HISTORY = 50;
 
+// Built-in tile rule templates
+const RULE_TEMPLATES = {
+  '9-tile': {
+    name: '9-Tile (3x3)',
+    slots: [
+      { label: 'NW', key: 'nw' },
+      { label: 'N',  key: 'n'  },
+      { label: 'NE', key: 'ne' },
+      { label: 'W',  key: 'w'  },
+      { label: 'C',  key: 'c'  },
+      { label: 'E',  key: 'e'  },
+      { label: 'SW', key: 'sw' },
+      { label: 'S',  key: 's'  },
+      { label: 'SE', key: 'se' },
+    ],
+    cols: 3,
+  },
+  '4-edge': {
+    name: '4-Edge',
+    slots: [
+      { label: 'Top',    key: 'n'  },
+      { label: 'Left',   key: 'w'  },
+      { label: 'Right',  key: 'e'  },
+      { label: 'Bottom', key: 's'  },
+    ],
+    cols: 2,
+  },
+  '4-corner': {
+    name: '4-Corner',
+    slots: [
+      { label: 'NW', key: 'nw' },
+      { label: 'NE', key: 'ne' },
+      { label: 'SW', key: 'sw' },
+      { label: 'SE', key: 'se' },
+    ],
+    cols: 2,
+  },
+  '13-tile': {
+    name: '13-Tile (Full)',
+    slots: [
+      { label: 'NW',       key: 'nw' },
+      { label: 'N',        key: 'n'  },
+      { label: 'NE',       key: 'ne' },
+      { label: 'W',        key: 'w'  },
+      { label: 'C',        key: 'c'  },
+      { label: 'E',        key: 'e'  },
+      { label: 'SW',       key: 'sw' },
+      { label: 'S',        key: 's'  },
+      { label: 'SE',       key: 'se' },
+      { label: 'Inner NW', key: 'inw' },
+      { label: 'Inner NE', key: 'ine' },
+      { label: 'Inner SW', key: 'isw' },
+      { label: 'Inner SE', key: 'ise' },
+    ],
+    cols: 3,
+  },
+  'custom': {
+    name: 'Custom',
+    slots: [],
+    cols: 3,
+  },
+};
+
 function createEmptyGrid(width, height) {
   return Array.from({ length: height }, () => Array(width).fill(null));
 }
@@ -34,6 +97,12 @@ const useStore = create(
         },
       ],
       activeLayerId: 'layer-1',
+
+      // Tile rules
+      tileRules: [],
+      activeTileRuleId: null,
+      editingRuleId: null,
+      editingSlotIndex: 0,
 
       // Tools
       activeTool: 'brush', // brush, eraser, fill, select
@@ -226,6 +295,122 @@ const useStore = create(
         set({ layers: snapshot, historyIndex: newIndex });
       },
 
+      // Tile rule management
+      createTileRule: (templateKey, name) => {
+        const template = RULE_TEMPLATES[templateKey];
+        if (!template) return;
+        const id = `rule-${Date.now()}`;
+        const rule = {
+          id,
+          name: name || template.name,
+          templateKey,
+          cols: template.cols,
+          slots: template.slots.map((s) => ({ ...s, tile: null })),
+        };
+        set((state) => ({
+          tileRules: [...state.tileRules, rule],
+          editingRuleId: id,
+          editingSlotIndex: 0,
+        }));
+      },
+
+      deleteTileRule: (id) => {
+        set((state) => ({
+          tileRules: state.tileRules.filter((r) => r.id !== id),
+          activeTileRuleId: state.activeTileRuleId === id ? null : state.activeTileRuleId,
+          editingRuleId: state.editingRuleId === id ? null : state.editingRuleId,
+        }));
+      },
+
+      setActiveTileRule: (id) => {
+        set({ activeTileRuleId: id, selectedTiles: null });
+      },
+
+      clearActiveTileRule: () => {
+        set({ activeTileRuleId: null });
+      },
+
+      startEditingRule: (id) => {
+        set({ editingRuleId: id, editingSlotIndex: 0 });
+      },
+
+      stopEditingRule: () => {
+        set({ editingRuleId: null, editingSlotIndex: 0 });
+      },
+
+      setEditingSlotIndex: (index) => {
+        set({ editingSlotIndex: index });
+      },
+
+      assignTileToSlot: (tilesetId, col, row, autoAdvance) => {
+        const state = get();
+        if (!state.editingRuleId) return;
+        const ruleIdx = state.tileRules.findIndex((r) => r.id === state.editingRuleId);
+        if (ruleIdx < 0) return;
+        const rule = state.tileRules[ruleIdx];
+        if (state.editingSlotIndex < 0 || state.editingSlotIndex >= rule.slots.length) return;
+
+        const newRules = [...state.tileRules];
+        const newSlots = [...rule.slots];
+        newSlots[state.editingSlotIndex] = {
+          ...newSlots[state.editingSlotIndex],
+          tile: { tilesetId, col, row },
+        };
+        newRules[ruleIdx] = { ...rule, slots: newSlots };
+
+        const updates = { tileRules: newRules };
+        if (autoAdvance) {
+          const nextIndex = state.editingSlotIndex + 1;
+          if (nextIndex < rule.slots.length) {
+            updates.editingSlotIndex = nextIndex;
+          }
+        }
+        set(updates);
+      },
+
+      clearSlotTile: (ruleId, slotIndex) => {
+        set((state) => ({
+          tileRules: state.tileRules.map((r) => {
+            if (r.id !== ruleId) return r;
+            const newSlots = [...r.slots];
+            newSlots[slotIndex] = { ...newSlots[slotIndex], tile: null };
+            return { ...r, slots: newSlots };
+          }),
+        }));
+      },
+
+      addCustomSlot: (ruleId, label) => {
+        set((state) => ({
+          tileRules: state.tileRules.map((r) => {
+            if (r.id !== ruleId) return r;
+            const key = `slot-${r.slots.length}`;
+            return { ...r, slots: [...r.slots, { label, key, tile: null }] };
+          }),
+        }));
+      },
+
+      removeCustomSlot: (ruleId, slotIndex) => {
+        set((state) => ({
+          tileRules: state.tileRules.map((r) => {
+            if (r.id !== ruleId) return r;
+            const newSlots = r.slots.filter((_, i) => i !== slotIndex);
+            return { ...r, slots: newSlots };
+          }),
+          editingSlotIndex: Math.min(
+            state.editingSlotIndex,
+            state.tileRules.find((r) => r.id === ruleId)?.slots.length - 2 || 0
+          ),
+        }));
+      },
+
+      renameTileRule: (id, name) => {
+        set((state) => ({
+          tileRules: state.tileRules.map((r) =>
+            r.id === id ? { ...r, name } : r
+          ),
+        }));
+      },
+
       // Painting
       paintTile: (x, y) => {
         const state = get();
@@ -238,6 +423,122 @@ const useStore = create(
           if (layer.data[y][x] === null) return;
           const newData = layer.data.map((row) => [...row]);
           newData[y][x] = null;
+          set({
+            layers: state.layers.map((l) =>
+              l.id === state.activeLayerId ? { ...l, data: newData } : l
+            ),
+          });
+          return;
+        }
+
+        // Auto-tile painting with tile rule
+        if (state.activeTool === 'brush' && state.activeTileRuleId) {
+          const rule = state.tileRules.find((r) => r.id === state.activeTileRuleId);
+          if (!rule || rule.slots.length === 0) return;
+
+          if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) return;
+
+          const newData = layer.data.map((row) => [...row]);
+
+          // Helper: is a cell part of this rule?
+          const isSameRule = (cx, cy) => {
+            if (cx < 0 || cx >= state.mapWidth || cy < 0 || cy >= state.mapHeight) return false;
+            const t = newData[cy][cx];
+            if (!t || !t.ruleId) return false;
+            return t.ruleId === rule.id;
+          };
+
+          // Resolve which slot to use based on neighbor mask
+          const resolveSlot = (cx, cy) => {
+            const n  = isSameRule(cx, cy - 1);
+            const s  = isSameRule(cx, cy + 1);
+            const w  = isSameRule(cx - 1, cy);
+            const e  = isSameRule(cx + 1, cy);
+            const nw = isSameRule(cx - 1, cy - 1);
+            const ne = isSameRule(cx + 1, cy - 1);
+            const sw = isSameRule(cx - 1, cy + 1);
+            const se = isSameRule(cx + 1, cy + 1);
+
+            const slotByKey = {};
+            for (const slot of rule.slots) {
+              slotByKey[slot.key] = slot;
+            }
+
+            // 9-tile / 13-tile logic
+            if (slotByKey.c) {
+              // Inner corners (for 13-tile): all cardinal neighbors present but diagonal missing
+              if (slotByKey.ise && n && w && s && e && !nw) return slotByKey.ise;
+              if (slotByKey.isw && n && w && s && e && !ne) return slotByKey.isw;
+              if (slotByKey.ine && n && w && s && e && !sw) return slotByKey.ine;
+              if (slotByKey.inw && n && w && s && e && !se) return slotByKey.inw;
+
+              // Outer corners: two adjacent edges missing
+              if (!n && !w) return slotByKey.nw || slotByKey.c;
+              if (!n && !e) return slotByKey.ne || slotByKey.c;
+              if (!s && !w) return slotByKey.sw || slotByKey.c;
+              if (!s && !e) return slotByKey.se || slotByKey.c;
+
+              // Edges: one side missing
+              if (!n) return slotByKey.n || slotByKey.c;
+              if (!s) return slotByKey.s || slotByKey.c;
+              if (!w) return slotByKey.w || slotByKey.c;
+              if (!e) return slotByKey.e || slotByKey.c;
+
+              return slotByKey.c;
+            }
+
+            // 4-edge only
+            if (slotByKey.n && !slotByKey.c) {
+              if (!n && slotByKey.n) return slotByKey.n;
+              if (!s && slotByKey.s) return slotByKey.s;
+              if (!w && slotByKey.w) return slotByKey.w;
+              if (!e && slotByKey.e) return slotByKey.e;
+              return rule.slots[0];
+            }
+
+            // 4-corner only
+            if (slotByKey.nw && !slotByKey.c && !slotByKey.n) {
+              if (!n && !w) return slotByKey.nw;
+              if (!n && !e) return slotByKey.ne || slotByKey.nw;
+              if (!s && !w) return slotByKey.sw || slotByKey.nw;
+              if (!s && !e) return slotByKey.se || slotByKey.nw;
+              return rule.slots[0];
+            }
+
+            // Fallback: first slot with a tile
+            return rule.slots.find((s) => s.tile) || rule.slots[0];
+          };
+
+          // Place the tile at (x, y)
+          const slot = resolveSlot(x, y);
+          if (slot && slot.tile) {
+            newData[y][x] = { ...slot.tile, ruleId: rule.id };
+          } else {
+            // Place a marker even without a tile assigned so neighbors detect it
+            const fallback = rule.slots.find((s) => s.tile);
+            if (fallback) {
+              newData[y][x] = { ...fallback.tile, ruleId: rule.id };
+            } else {
+              return; // No tiles assigned at all
+            }
+          }
+
+          // Update all neighbors that are part of this rule
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = x + dx;
+              const ny = y + dy;
+              if (nx < 0 || nx >= state.mapWidth || ny < 0 || ny >= state.mapHeight) continue;
+              const neighbor = newData[ny][nx];
+              if (!neighbor || neighbor.ruleId !== rule.id) continue;
+              const nSlot = resolveSlot(nx, ny);
+              if (nSlot && nSlot.tile) {
+                newData[ny][nx] = { ...nSlot.tile, ruleId: rule.id };
+              }
+            }
+          }
+
           set({
             layers: state.layers.map((l) =>
               l.id === state.activeLayerId ? { ...l, data: newData } : l
@@ -357,6 +658,10 @@ const useStore = create(
           tilesets: [],
           activeTilesetId: null,
           selectedTiles: null,
+          tileRules: [],
+          activeTileRuleId: null,
+          editingRuleId: null,
+          editingSlotIndex: 0,
           layers: [
             {
               id: 'layer-1',
@@ -387,9 +692,12 @@ const useStore = create(
         activeLayerId: state.activeLayerId,
         activeTool: state.activeTool,
         showGrid: state.showGrid,
+        tileRules: state.tileRules,
+        activeTileRuleId: state.activeTileRuleId,
       }),
     }
   )
 );
 
 export default useStore;
+export { RULE_TEMPLATES };

@@ -16,6 +16,8 @@ export default function MapCanvas() {
   const activeLayerId = useStore((s) => s.activeLayerId);
   const paintTile = useStore((s) => s.paintTile);
   const pushHistory = useStore((s) => s.pushHistory);
+  const activeTileRuleId = useStore((s) => s.activeTileRuleId);
+  const tileRules = useStore((s) => s.tileRules);
 
   const [camera, setCamera] = useState(null);
   const [isPanning, setIsPanning] = useState(false);
@@ -301,7 +303,40 @@ export default function MapCanvas() {
       hoverTile.row >= 0 &&
       hoverTile.row < mapHeight
     ) {
-      if (activeTool === 'brush' && selectedTiles) {
+      if (activeTool === 'brush' && activeTileRuleId) {
+        // Show the center/first tile of the rule as preview
+        const rule = tileRules.find((r) => r.id === activeTileRuleId);
+        if (rule) {
+          const centerSlot = rule.slots.find((s) => s.key === 'c') || rule.slots.find((s) => s.tile);
+          if (centerSlot && centerSlot.tile) {
+            const ts = tilesets.find((t) => t.id === centerSlot.tile.tilesetId);
+            const img = imageCache[centerSlot.tile.tilesetId];
+            if (ts && img) {
+              ctx.globalAlpha = 0.5;
+              ctx.drawImage(
+                img,
+                centerSlot.tile.col * ts.tileWidth,
+                centerSlot.tile.row * ts.tileHeight,
+                ts.tileWidth,
+                ts.tileHeight,
+                hoverTile.col * tileSize,
+                hoverTile.row * tileSize,
+                tileSize,
+                tileSize
+              );
+              ctx.globalAlpha = 1;
+            }
+          }
+        }
+        ctx.strokeStyle = 'rgba(255, 167, 38, 0.8)';
+        ctx.lineWidth = 2 / camera.zoom;
+        ctx.strokeRect(
+          hoverTile.col * tileSize,
+          hoverTile.row * tileSize,
+          tileSize,
+          tileSize
+        );
+      } else if (activeTool === 'brush' && selectedTiles) {
         const sel = selectedTiles;
         const selW = sel.endCol - sel.startCol + 1;
         const selH = sel.endRow - sel.startRow + 1;
@@ -410,6 +445,8 @@ export default function MapCanvas() {
     hoverTile,
     activeTool,
     selectedTiles,
+    activeTileRuleId,
+    tileRules,
     canvasSize,
   ]);
 

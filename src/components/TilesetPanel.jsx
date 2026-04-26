@@ -9,6 +9,9 @@ export default function TilesetPanel() {
   const removeTileset = useStore((s) => s.removeTileset);
   const setActiveTileset = useStore((s) => s.setActiveTileset);
   const setSelectedTiles = useStore((s) => s.setSelectedTiles);
+  const editingRuleId = useStore((s) => s.editingRuleId);
+  const assignTileToSlot = useStore((s) => s.assignTileToSlot);
+  const clearActiveTileRule = useStore((s) => s.clearActiveTileRule);
 
   const [tileSizeInput, setTileSizeInput] = useState(32);
   const [isDragging, setIsDragging] = useState(false);
@@ -187,6 +190,15 @@ export default function TilesetPanel() {
     const { col, row } = getTileCoords(e);
     if (col < 0 || col >= activeTileset.cols || row < 0 || row >= activeTileset.rows)
       return;
+
+    // If editing a tile rule, assign to slot instead of selecting
+    if (editingRuleId) {
+      e.preventDefault();
+      const autoAdvance = e.ctrlKey || e.metaKey;
+      assignTileToSlot(activeTileset.id, col, row, autoAdvance);
+      return;
+    }
+
     setSelecting(true);
     setSelStart({ col, row });
     setSelEnd({
@@ -216,13 +228,17 @@ export default function TilesetPanel() {
     if (!selecting || !selEnd) return;
     setSelecting(false);
     setSelectedTiles(selEnd);
+    clearActiveTileRule();
     setSelEnd(null);
     setSelStart(null);
   };
 
   return (
-    <div className="panel tileset-panel">
-      <div className="panel-header">Tilesets</div>
+    <div className={`panel tileset-panel ${editingRuleId ? 'rule-assign-mode' : ''}`}>
+      <div className="panel-header">
+        Tilesets
+        {editingRuleId && <span className="assign-mode-badge">Assign Mode</span>}
+      </div>
 
       {/* Drop zone */}
       <div
@@ -303,6 +319,16 @@ export default function TilesetPanel() {
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={() => {
               if (selecting) handleCanvasMouseUp();
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              // On macOS, Ctrl+Click fires as contextmenu instead of mousedown
+              if (editingRuleId && activeTileset) {
+                const { col, row } = getTileCoords(e);
+                if (col >= 0 && col < activeTileset.cols && row >= 0 && row < activeTileset.rows) {
+                  assignTileToSlot(activeTileset.id, col, row, true);
+                }
+              }
             }}
           />
           {selectedTiles && selectedTiles.tilesetId === activeTileset.id && (
