@@ -52,17 +52,32 @@ export default function ObjectPropertiesPanel() {
           </select>
         </label>
 
-        <label>
-          Frame
-          <input
-            type="number"
-            min="0"
-            max={anim.frameCount - 1}
-            value={obj.frame || 0}
-            onChange={(e) => update({ frame: Number(e.target.value) })}
-          />
-          <span className="prop-hint">/ {anim.frameCount - 1}</span>
-        </label>
+        {anim.frameCount > 1 && (
+          <div className="prop-row">
+            <label style={{ flex: 'none' }}>
+              <input
+                type="checkbox"
+                checked={obj.animate ?? true}
+                onChange={(e) => update({ animate: e.target.checked })}
+              />
+              Animate
+            </label>
+          </div>
+        )}
+
+        {!(obj.animate ?? true) && (
+          <label>
+            Frame
+            <input
+              type="number"
+              min="0"
+              max={anim.frameCount - 1}
+              value={obj.frame || 0}
+              onChange={(e) => update({ frame: Number(e.target.value) })}
+            />
+            <span className="prop-hint">/ {anim.frameCount - 1}</span>
+          </label>
+        )}
 
         <div className="prop-row">
           <label>

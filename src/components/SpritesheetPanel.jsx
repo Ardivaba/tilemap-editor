@@ -10,12 +10,15 @@ export default function SpritesheetPanel() {
   const removeSpritesheet = useStore((s) => s.removeSpritesheet);
   const setActiveSpritesheet = useStore((s) => s.setActiveSpritesheet);
   const setActiveAnimationIndex = useStore((s) => s.setActiveAnimationIndex);
+  const activeFrame = useStore((s) => s.activeFrame);
+  const setActiveFrame = useStore((s) => s.setActiveFrame);
   const setActiveTool = useStore((s) => s.setActiveTool);
 
   const [frameWidth, setFrameWidth] = useState(32);
   const [frameHeight, setFrameHeight] = useState(32);
   const [isDragging, setIsDragging] = useState(false);
   const [imageCache, setImageCache] = useState({});
+  const [expandedAnims, setExpandedAnims] = useState({}); // { animIndex: true }
 
   const activeSpritesheet = spritesheets.find((s) => s.id === activeSpritesheetId);
 
@@ -206,44 +209,90 @@ export default function SpritesheetPanel() {
 
       {activeSpritesheet && (
         <div className="animation-list">
-          {activeSpritesheet.animations.map((anim, idx) => (
-            <div
-              key={idx}
-              className={`animation-item ${idx === activeAnimationIndex ? 'active' : ''}`}
-              onClick={() => {
-                setActiveAnimationIndex(idx);
-                setActiveTool('object');
-              }}
-            >
-              <AnimationPreview
-                spritesheet={activeSpritesheet}
-                animIndex={idx}
-                imageCache={imageCache}
-              />
-              <div className="animation-info">
-                <input
-                  className="animation-name-input"
-                  value={anim.name}
-                  onChange={(e) => updateAnimationName(activeSpritesheet.id, idx, e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <div className="animation-meta">
-                  <label onClick={(e) => e.stopPropagation()}>
-                    Frames:
+          {activeSpritesheet.animations.map((anim, idx) => {
+            const isExpanded = expandedAnims[idx];
+            const isActive = idx === activeAnimationIndex && activeFrame === null;
+            return (
+              <div key={idx} className="animation-entry">
+                <div
+                  className={`animation-item ${isActive ? 'active' : ''} ${
+                    idx === activeAnimationIndex && activeFrame !== null ? 'has-frame-selected' : ''
+                  }`}
+                  onClick={() => {
+                    setActiveAnimationIndex(idx);
+                    setActiveFrame(null);
+                    setActiveTool('object');
+                  }}
+                >
+                  <AnimationPreview
+                    spritesheet={activeSpritesheet}
+                    animIndex={idx}
+                    imageCache={imageCache}
+                  />
+                  <div className="animation-info">
                     <input
-                      type="number"
-                      min="1"
-                      max={activeSpritesheet.cols}
-                      value={anim.frameCount}
-                      onChange={(e) =>
-                        updateAnimationFrameCount(activeSpritesheet.id, idx, Number(e.target.value))
-                      }
+                      className="animation-name-input"
+                      value={anim.name}
+                      onChange={(e) => updateAnimationName(activeSpritesheet.id, idx, e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
                     />
-                  </label>
+                    <div className="animation-meta">
+                      <label onClick={(e) => e.stopPropagation()}>
+                        Frames:
+                        <input
+                          type="number"
+                          min="1"
+                          max={activeSpritesheet.cols}
+                          value={anim.frameCount}
+                          onChange={(e) =>
+                            updateAnimationFrameCount(activeSpritesheet.id, idx, Number(e.target.value))
+                          }
+                        />
+                      </label>
+                    </div>
+                  </div>
+                  {anim.frameCount > 1 && (
+                    <button
+                      className={`expand-btn ${isExpanded ? 'expanded' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedAnims((prev) => ({ ...prev, [idx]: !prev[idx] }));
+                      }}
+                      title={isExpanded ? 'Collapse frames' : 'Expand frames'}
+                    >
+                      {isExpanded ? '\u25B2' : '\u25BC'}
+                    </button>
+                  )}
                 </div>
+
+                {isExpanded && (
+                  <div className="frame-grid">
+                    {Array.from({ length: anim.frameCount }, (_, f) => (
+                      <div
+                        key={f}
+                        className={`frame-cell ${
+                          idx === activeAnimationIndex && activeFrame === f ? 'active' : ''
+                        }`}
+                        onClick={() => {
+                          setActiveAnimationIndex(idx);
+                          setActiveFrame(f);
+                          setActiveTool('object');
+                        }}
+                        title={`Frame ${f}`}
+                      >
+                        <FramePreview
+                          spritesheet={activeSpritesheet}
+                          animIndex={idx}
+                          frameIndex={f}
+                          imageCache={imageCache}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -283,4 +332,39 @@ function AnimationPreview({ spritesheet, animIndex, imageCache }) {
   }, [spritesheet, animIndex, imageCache, anim]);
 
   return <canvas ref={canvasRef} className="animation-preview-canvas" />;
+}
+
+function FramePreview({ spritesheet, animIndex, frameIndex, imageCache }) {
+  const canvasRef = useRef(null);
+  const anim = spritesheet.animations[animIndex];
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const img = imageCache[spritesheet.id];
+    if (!img) return;
+
+    const size = 32;
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, size, size);
+
+    const fw = spritesheet.frameWidth;
+    const fh = spritesheet.frameHeight;
+    const scale = Math.min(size / fw, size / fh);
+    const dw = fw * scale;
+    const dh = fh * scale;
+    const dx = (size - dw) / 2;
+    const dy = (size - dh) / 2;
+
+    ctx.drawImage(
+      img,
+      frameIndex * fw, anim.row * fh, fw, fh,
+      dx, dy, dw, dh
+    );
+  }, [spritesheet, animIndex, frameIndex, imageCache, anim]);
+
+  return <canvas ref={canvasRef} className="frame-preview-canvas" />;
 }

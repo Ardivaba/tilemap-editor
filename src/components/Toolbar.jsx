@@ -20,6 +20,8 @@ export default function Toolbar() {
   const spritesheets = useStore((s) => s.spritesheets);
   const snapToGrid = useStore((s) => s.snapToGrid);
   const toggleSnapToGrid = useStore((s) => s.toggleSnapToGrid);
+  const activeColor = useStore((s) => s.activeColor);
+  const setActiveColor = useStore((s) => s.setActiveColor);
   const addTileset = useStore((s) => s.addTileset);
   const addSpritesheet = useStore((s) => s.addSpritesheet);
 
@@ -35,6 +37,7 @@ export default function Toolbar() {
     { id: 'brush', label: 'B', title: 'Brush (B)' },
     { id: 'eraser', label: 'E', title: 'Eraser (E)' },
     { id: 'fill', label: 'F', title: 'Fill (F)' },
+    { id: 'tint', label: 'T', title: 'Tint (T)' },
     { id: 'object', label: 'O', title: 'Place Object (O)' },
     { id: 'select', label: 'V', title: 'Select/Move (V)' },
   ];
@@ -234,6 +237,11 @@ export default function Toolbar() {
             for (let x = 0; x < mapWidth; x++) {
               const tile = layer.data[y]?.[x];
               if (!tile) continue;
+              if (tile.color) {
+                ctx.fillStyle = tile.color;
+                ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+                continue;
+              }
               const img = images[tile.tilesetId];
               const ts = tilesets.find((t) => t.id === tile.tilesetId);
               if (!img || !ts) continue;
@@ -308,6 +316,15 @@ export default function Toolbar() {
             {tool.label}
           </button>
         ))}
+        <div className="color-picker-wrapper" title="Tint color">
+          <input
+            type="color"
+            className="color-picker-input"
+            value={activeColor}
+            onChange={(e) => setActiveColor(e.target.value)}
+            onClick={() => setActiveTool('tint')}
+          />
+        </div>
       </div>
 
       <div className="toolbar-separator" />

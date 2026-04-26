@@ -72,6 +72,55 @@ function createEmptyGrid(width, height) {
   return Array.from({ length: height }, () => Array(width).fill(null));
 }
 
+// Re-resolve auto-tile rule slots for tiles bordering the given rectangle
+function resolveRuleNeighbors(newData, minX, minY, maxX, maxY, mapWidth, mapHeight, tileRules) {
+  const isSameRule = (ruleId, cx, cy) => {
+    if (cx < 0 || cx >= mapWidth || cy < 0 || cy >= mapHeight) return false;
+    const t = newData[cy][cx];
+    return t && t.ruleId === ruleId;
+  };
+
+  const resolveSlot = (rule, cx, cy) => {
+    const n = isSameRule(rule.id, cx, cy - 1), s = isSameRule(rule.id, cx, cy + 1);
+    const w = isSameRule(rule.id, cx - 1, cy), e = isSameRule(rule.id, cx + 1, cy);
+    const nw = isSameRule(rule.id, cx - 1, cy - 1), ne = isSameRule(rule.id, cx + 1, cy - 1);
+    const sw = isSameRule(rule.id, cx - 1, cy + 1), se = isSameRule(rule.id, cx + 1, cy + 1);
+    const slotByKey = {};
+    for (const slot of rule.slots) slotByKey[slot.key] = slot;
+    if (slotByKey.c) {
+      if (slotByKey.ise && n && w && s && e && !nw) return slotByKey.ise;
+      if (slotByKey.isw && n && w && s && e && !ne) return slotByKey.isw;
+      if (slotByKey.ine && n && w && s && e && !sw) return slotByKey.ine;
+      if (slotByKey.inw && n && w && s && e && !se) return slotByKey.inw;
+      if (!n && !w) return slotByKey.nw || slotByKey.c;
+      if (!n && !e) return slotByKey.ne || slotByKey.c;
+      if (!s && !w) return slotByKey.sw || slotByKey.c;
+      if (!s && !e) return slotByKey.se || slotByKey.c;
+      if (!n) return slotByKey.n || slotByKey.c;
+      if (!s) return slotByKey.s || slotByKey.c;
+      if (!w) return slotByKey.w || slotByKey.c;
+      if (!e) return slotByKey.e || slotByKey.c;
+      return slotByKey.c;
+    }
+    return rule.slots.find((s) => s.tile) || rule.slots[0];
+  };
+
+  // Scan the border ring around the erased rectangle (1 tile outward)
+  for (let y = minY - 1; y <= maxY + 1; y++) {
+    for (let x = minX - 1; x <= maxX + 1; x++) {
+      if (x < 0 || x >= mapWidth || y < 0 || y >= mapHeight) continue;
+      const tile = newData[y][x];
+      if (!tile || !tile.ruleId) continue;
+      const rule = tileRules.find((r) => r.id === tile.ruleId);
+      if (!rule) continue;
+      const slot = resolveSlot(rule, x, y);
+      if (slot && slot.tile) {
+        newData[y][x] = { ...slot.tile, ruleId: rule.id };
+      }
+    }
+  }
+}
+
 const useStore = create(
   persist(
     (set, get) => ({
@@ -109,12 +158,16 @@ const useStore = create(
       spritesheets: [],
       activeSpritesheetId: null,
       activeAnimationIndex: 0,
+      activeFrame: null, // null = animate, number = fixed frame
       selectedObjectId: null,
       selectedObjectLayerId: null,
       snapToGrid: false,
 
+      // Tint
+      activeColor: '#ff0000',
+
       // Tools
-      activeTool: 'brush', // brush, eraser, fill, object, select
+      activeTool: 'brush', // brush, eraser, fill, tint, object, select
       showGrid: true,
 
       // History (not persisted separately - handled via middleware exclusion)
@@ -268,6 +321,7 @@ const useStore = create(
 
       // Tool
       setActiveTool: (tool) => set({ activeTool: tool }),
+      setActiveColor: (color) => set({ activeColor: color }),
       toggleGrid: () => set((state) => ({ showGrid: !state.showGrid })),
 
       // History
@@ -443,8 +497,9 @@ const useStore = create(
         }));
       },
 
-      setActiveSpritesheet: (id) => set({ activeSpritesheetId: id, activeAnimationIndex: 0 }),
-      setActiveAnimationIndex: (index) => set({ activeAnimationIndex: index }),
+      setActiveSpritesheet: (id) => set({ activeSpritesheetId: id, activeAnimationIndex: 0, activeFrame: null }),
+      setActiveAnimationIndex: (index) => set({ activeAnimationIndex: index, activeFrame: null }),
+      setActiveFrame: (frame) => set({ activeFrame: frame }),
       toggleSnapToGrid: () => set((state) => ({ snapToGrid: !state.snapToGrid })),
 
       // Object management
@@ -513,6 +568,8 @@ const useStore = create(
             newData[y][x] = null;
           }
         }
+        // Re-resolve neighboring rule tiles
+        resolveRuleNeighbors(newData, minX, minY, maxX, maxY, state.mapWidth, state.mapHeight, state.tileRules);
         set({
           layers: state.layers.map((l) =>
             l.id === state.activeLayerId ? { ...l, data: newData } : l
@@ -529,6 +586,21 @@ const useStore = create(
         const minY = Math.max(0, Math.min(y1, y2));
         const maxY = Math.min(state.mapHeight - 1, Math.max(y1, y2));
         const newData = layer.data.map((row) => [...row]);
+
+        // Tint rect fill
+        if (state.activeTool === 'tint') {
+          for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+              newData[y][x] = { color: state.activeColor };
+            }
+          }
+          set({
+            layers: state.layers.map((l) =>
+              l.id === state.activeLayerId ? { ...l, data: newData } : l
+            ),
+          });
+          return;
+        }
 
         // Tile rule painting
         if (state.activeTileRuleId) {
@@ -624,6 +696,23 @@ const useStore = create(
           if (layer.data[y][x] === null) return;
           const newData = layer.data.map((row) => [...row]);
           newData[y][x] = null;
+          resolveRuleNeighbors(newData, x, y, x, y, state.mapWidth, state.mapHeight, state.tileRules);
+          set({
+            layers: state.layers.map((l) =>
+              l.id === state.activeLayerId ? { ...l, data: newData } : l
+            ),
+          });
+          return;
+        }
+
+        // Tint tool - paint solid color
+        if (state.activeTool === 'tint') {
+          if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) return;
+          const tileValue = { color: state.activeColor };
+          const existing = layer.data[y][x];
+          if (existing && existing.color === state.activeColor) return;
+          const newData = layer.data.map((row) => [...row]);
+          newData[y][x] = tileValue;
           set({
             layers: state.layers.map((l) =>
               l.id === state.activeLayerId ? { ...l, data: newData } : l
@@ -866,9 +955,11 @@ const useStore = create(
           spritesheets: [],
           activeSpritesheetId: null,
           activeAnimationIndex: 0,
+          activeFrame: null,
           selectedObjectId: null,
           selectedObjectLayerId: null,
           snapToGrid: false,
+          activeColor: '#ff0000',
           layers: [
             {
               id: 'layer-1',

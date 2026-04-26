@@ -12,6 +12,7 @@ export default function MapCanvas() {
   const tilesets = useStore((s) => s.tilesets);
   const showGrid = useStore((s) => s.showGrid);
   const activeTool = useStore((s) => s.activeTool);
+  const activeColor = useStore((s) => s.activeColor);
   const selectedTiles = useStore((s) => s.selectedTiles);
   const activeLayerId = useStore((s) => s.activeLayerId);
   const paintTile = useStore((s) => s.paintTile);
@@ -23,6 +24,7 @@ export default function MapCanvas() {
   const spritesheets = useStore((s) => s.spritesheets);
   const activeSpritesheetId = useStore((s) => s.activeSpritesheetId);
   const activeAnimationIndex = useStore((s) => s.activeAnimationIndex);
+  const activeFrame = useStore((s) => s.activeFrame);
   const selectedObjectId = useStore((s) => s.selectedObjectId);
   const selectedObjectLayerId = useStore((s) => s.selectedObjectLayerId);
   const snapToGrid = useStore((s) => s.snapToGrid);
@@ -45,7 +47,10 @@ export default function MapCanvas() {
   const [dragOffset, setDragOffset] = useState(null);
   const [animTime, setAnimTime] = useState(0);
   const spaceHeld = useRef(false);
+  const [shiftHeld, setShiftHeld] = useState(false);
   const [rectDrag, setRectDrag] = useState(null); // { startCol, startRow, erase: bool }
+  const collisionCanvasRef = useRef(null); // offscreen canvas for pixel collision
+  const clipboardRef = useRef(null); // copied object data
 
   // Load tileset + spritesheet images
   useEffect(() => {
@@ -82,6 +87,7 @@ export default function MapCanvas() {
   // Keyboard shortcuts + space panning
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (e.key === 'Shift') setShiftHeld(true);
       if (e.key === ' ') {
         e.preventDefault();
         spaceHeld.current = true;
@@ -95,12 +101,13 @@ export default function MapCanvas() {
       if (e.key === 'b' || e.key === 'B') store.setActiveTool('brush');
       if (e.key === 'e' || e.key === 'E') store.setActiveTool('eraser');
       if (e.key === 'f' || e.key === 'F') store.setActiveTool('fill');
+      if (e.key === 't' || e.key === 'T') store.setActiveTool('tint');
       if (e.key === 'g' || e.key === 'G') store.toggleGrid();
       if (e.key === 'o' || e.key === 'O') store.setActiveTool('object');
       if (e.key === 'v' || e.key === 'V') store.setActiveTool('select');
 
       // WASD to move tileset selection (only in tile modes)
-      if (['brush', 'eraser', 'fill'].includes(store.activeTool)) {
+      if (['brush', 'eraser', 'fill', 'tint'].includes(store.activeTool)) {
         if (e.key === 'a' || e.key === 'A') { e.preventDefault(); store.moveSelectedTiles(-1, 0); }
         if (e.key === 'd' || e.key === 'D') { e.preventDefault(); store.moveSelectedTiles(1, 0); }
         if (e.key === 'w' || e.key === 'W') { e.preventDefault(); store.moveSelectedTiles(0, -1); }
@@ -135,6 +142,48 @@ export default function MapCanvas() {
         }
       }
 
+      // Copy selected object
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c' && store.selectedObjectId) {
+        e.preventDefault();
+        const layer = store.layers.find((l) => l.id === store.selectedObjectLayerId);
+        const obj = layer?.objects?.find((o) => o.id === store.selectedObjectId);
+        if (obj) {
+          clipboardRef.current = { ...obj, layerId: store.selectedObjectLayerId };
+        }
+      }
+
+      // Paste copied object
+      if ((e.ctrlKey || e.metaKey) && e.key === 'v' && clipboardRef.current) {
+        e.preventDefault();
+        const src = clipboardRef.current;
+        store.pushHistory();
+        const newObj = {
+          ...src,
+          id: `obj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          x: src.x + 16,
+          y: src.y + 16,
+        };
+        delete newObj.layerId;
+        store.placeObject(newObj);
+      }
+
+      // Duplicate in place
+      if ((e.ctrlKey || e.metaKey) && e.key === 'd' && store.selectedObjectId) {
+        e.preventDefault();
+        const layer = store.layers.find((l) => l.id === store.selectedObjectLayerId);
+        const obj = layer?.objects?.find((o) => o.id === store.selectedObjectId);
+        if (obj) {
+          store.pushHistory();
+          const newObj = {
+            ...obj,
+            id: `obj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            x: obj.x + 16,
+            y: obj.y + 16,
+          };
+          store.placeObject(newObj);
+        }
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
         store.undo();
@@ -150,9 +199,8 @@ export default function MapCanvas() {
     };
 
     const handleKeyUp = (e) => {
-      if (e.key === ' ') {
-        spaceHeld.current = false;
-      }
+      if (e.key === ' ') spaceHeld.current = false;
+      if (e.key === 'Shift') setShiftHeld(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -210,6 +258,153 @@ export default function MapCanvas() {
     [layers, spritesheets]
   );
 
+  // Snap position so object center aligns to nearest tile center
+  const snapToTileCenter = useCallback(
+    (x, y, fw, fh) => ({
+      x: Math.round((x + fw / 2) / tileSize) * tileSize - fw / 2,
+      y: Math.round((y + fh / 2) / tileSize) * tileSize - fh / 2,
+    }),
+    [tileSize]
+  );
+
+  // Pixel collision: check if object sprite overlaps with any tile pixels
+  const checkPixelCollision = useCallback(
+    (objX, objY, ss, animIdx) => {
+      const img = imageCache[ss.id];
+      if (!img) return false;
+      const anim = ss.animations[animIdx] || ss.animations[0];
+      if (!anim) return false;
+
+      const fw = ss.frameWidth;
+      const fh = ss.frameHeight;
+      const frame = anim.frameCount > 1 ? animTime % anim.frameCount : 0;
+
+      // Create/reuse offscreen canvas
+      if (!collisionCanvasRef.current) {
+        collisionCanvasRef.current = document.createElement('canvas');
+      }
+      const oc = collisionCanvasRef.current;
+
+      // Render sprite to get its pixels
+      oc.width = fw;
+      oc.height = fh;
+      const octx = oc.getContext('2d');
+      octx.imageSmoothingEnabled = false;
+      octx.clearRect(0, 0, fw, fh);
+      octx.drawImage(img, frame * fw, anim.row * fh, fw, fh, 0, 0, fw, fh);
+      const spriteData = octx.getImageData(0, 0, fw, fh).data;
+
+      // Check every N-th pixel against tile data
+      const step = 2; // sample every 2px for performance
+      const activeLayer = layers.find((l) => l.id === activeLayerId);
+      if (!activeLayer) return false;
+
+      for (let py = 0; py < fh; py += step) {
+        for (let px = 0; px < fw; px += step) {
+          const spriteAlpha = spriteData[(py * fw + px) * 4 + 3];
+          if (spriteAlpha < 10) continue; // transparent sprite pixel
+
+          // World position of this sprite pixel
+          const wx = Math.floor(objX + px);
+          const wy = Math.floor(objY + py);
+
+          // Which tile cell does this land on?
+          const tileCol = Math.floor(wx / tileSize);
+          const tileRow = Math.floor(wy / tileSize);
+          if (tileCol < 0 || tileCol >= mapWidth || tileRow < 0 || tileRow >= mapHeight) continue;
+
+          const tile = activeLayer.data[tileRow]?.[tileCol];
+          if (!tile) continue;
+
+          // Get tile image pixel at the sub-tile position
+          const ts = tilesets.find((t) => t.id === tile.tilesetId);
+          const tileImg = imageCache[tile.tilesetId];
+          if (!ts || !tileImg) continue;
+
+          // Render this specific tile to check its pixel
+          oc.width = ts.tileWidth;
+          oc.height = ts.tileHeight;
+          octx.clearRect(0, 0, ts.tileWidth, ts.tileHeight);
+          octx.drawImage(
+            tileImg,
+            tile.col * ts.tileWidth, tile.row * ts.tileHeight,
+            ts.tileWidth, ts.tileHeight,
+            0, 0, ts.tileWidth, ts.tileHeight
+          );
+
+          // Sub-tile pixel position (map to tile source coords)
+          const subX = Math.floor(((wx % tileSize) / tileSize) * ts.tileWidth);
+          const subY = Math.floor(((wy % tileSize) / tileSize) * ts.tileHeight);
+          if (subX < 0 || subX >= ts.tileWidth || subY < 0 || subY >= ts.tileHeight) continue;
+
+          const tileData = octx.getImageData(subX, subY, 1, 1).data;
+          if (tileData[3] > 10) {
+            return true; // collision!
+          }
+        }
+      }
+      return false;
+    },
+    [imageCache, layers, activeLayerId, tilesets, mapWidth, mapHeight, tileSize, animTime]
+  );
+
+  // Binary search along one axis to find the furthest non-colliding position
+  const binarySearchAxis = useCallback(
+    (fixedAxis, movingOld, movingNew, isX, fixedVal, ss, animIdx) => {
+      // movingOld = old value of the moving axis, movingNew = desired value
+      // If old position already collides, just return it (can't do better)
+      let lo = movingOld;
+      let hi = movingNew;
+      // 6 iterations gives sub-pixel precision
+      for (let i = 0; i < 6; i++) {
+        const mid = Math.round((lo + hi) / 2);
+        const testX = isX ? mid : fixedVal;
+        const testY = isX ? fixedVal : mid;
+        if (checkPixelCollision(testX, testY, ss, animIdx)) {
+          hi = mid;
+        } else {
+          lo = mid;
+        }
+      }
+      return lo;
+    },
+    [checkPixelCollision]
+  );
+
+  // Resolve position with pixel collision (axis-separated with binary search)
+  const resolveCollision = useCallback(
+    (oldX, oldY, newX, newY, ss, animIdx) => {
+      // Try full move first
+      if (!checkPixelCollision(newX, newY, ss, animIdx)) {
+        return { x: newX, y: newY };
+      }
+
+      // Resolve each axis independently with binary search
+      // First try X with old Y
+      let resolvedX = oldX;
+      if (oldX !== newX) {
+        if (!checkPixelCollision(newX, oldY, ss, animIdx)) {
+          resolvedX = newX;
+        } else {
+          resolvedX = binarySearchAxis('y', oldX, newX, true, oldY, ss, animIdx);
+        }
+      }
+
+      // Then try Y with resolved X
+      let resolvedY = oldY;
+      if (oldY !== newY) {
+        if (!checkPixelCollision(resolvedX, newY, ss, animIdx)) {
+          resolvedY = newY;
+        } else {
+          resolvedY = binarySearchAxis('x', oldY, newY, false, resolvedX, ss, animIdx);
+        }
+      }
+
+      return { x: resolvedX, y: resolvedY };
+    },
+    [checkPixelCollision, binarySearchAxis]
+  );
+
   const handleMouseDown = useCallback(
     (e) => {
       if (e.button === 1 || (e.button === 0 && spaceHeld.current)) {
@@ -221,7 +416,7 @@ export default function MapCanvas() {
       }
 
       // Shift+drag for rect fill/erase (in tile modes)
-      if (e.shiftKey && ['brush', 'eraser', 'fill'].includes(activeTool)) {
+      if (e.shiftKey && ['brush', 'eraser', 'fill', 'tint'].includes(activeTool)) {
         const tile = screenToTile(e.clientX, e.clientY);
         if (!tile) return;
         e.preventDefault();
@@ -230,7 +425,9 @@ export default function MapCanvas() {
         return;
       }
 
-      if (e.button !== 0) return;
+      // On macOS, Ctrl+click fires as button 2. Allow it for object/select modes.
+      const isCtrlClick = (e.ctrlKey || e.metaKey) && e.button === 2;
+      if (e.button !== 0 && !isCtrlClick) return;
 
       const world = screenToWorld(e.clientX, e.clientY);
       if (!world) return;
@@ -239,24 +436,51 @@ export default function MapCanvas() {
       if (activeTool === 'object') {
         const ss = spritesheets.find((s) => s.id === activeSpritesheetId);
         if (!ss || !ss.animations[activeAnimationIndex]) return;
-        pushHistory();
         // Center on cursor
         let px = world.x - ss.frameWidth / 2;
         let py = world.y - ss.frameHeight / 2;
-        if (snapToGrid) {
-          px = Math.round(px / tileSize) * tileSize;
-          py = Math.round(py / tileSize) * tileSize;
+        if (e.shiftKey || snapToGrid) {
+          const snapped = snapToTileCenter(px, py, ss.frameWidth, ss.frameHeight);
+          px = snapped.x;
+          py = snapped.y;
         }
-        // Always pixel-snap
         px = Math.round(px);
         py = Math.round(py);
+        // Ctrl = snap to nearest non-colliding position
+        if ((e.ctrlKey || e.metaKey) && checkPixelCollision(px, py, ss, activeAnimationIndex)) {
+          // Search outward in all 4 directions, pick the closest valid position
+          let best = null;
+          let bestDist = Infinity;
+          for (let offset = 1; offset <= 200; offset++) {
+            const candidates = [
+              { x: px, y: py - offset },
+              { x: px, y: py + offset },
+              { x: px - offset, y: py },
+              { x: px + offset, y: py },
+            ];
+            for (const c of candidates) {
+              if (!checkPixelCollision(c.x, c.y, ss, activeAnimationIndex)) {
+                if (offset < bestDist) {
+                  bestDist = offset;
+                  best = c;
+                }
+              }
+            }
+            if (best) break;
+          }
+          if (!best) return;
+          px = Math.round(best.x);
+          py = Math.round(best.y);
+        }
+        pushHistory();
         placeObject({
           id: `obj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           spritesheetId: ss.id,
           x: px,
           y: py,
           animationIndex: activeAnimationIndex,
-          frame: 0,
+          frame: activeFrame ?? 0,
+          animate: activeFrame === null,
           scaleX: 1,
           scaleY: 1,
           name: ss.animations[activeAnimationIndex].name,
@@ -308,15 +532,33 @@ export default function MapCanvas() {
 
       // Drag object
       if (isDraggingObject && selectedObjectId && world && dragOffset) {
+        const layer = layers.find((l) => l.id === selectedObjectLayerId);
+        const obj = layer?.objects?.find((o) => o.id === selectedObjectId);
+        if (!obj) return;
+
+        const ss = spritesheets.find((s) => s.id === obj.spritesheetId);
         let nx = world.x - dragOffset.x;
         let ny = world.y - dragOffset.y;
-        if (snapToGrid) {
-          nx = Math.round(nx / tileSize) * tileSize;
-          ny = Math.round(ny / tileSize) * tileSize;
+
+        if (e.shiftKey || snapToGrid) {
+          const fw = ss ? ss.frameWidth : tileSize;
+          const fh = ss ? ss.frameHeight : tileSize;
+          const snapped = snapToTileCenter(nx, ny, fw, fh);
+          nx = snapped.x;
+          ny = snapped.y;
         }
+
         // Always pixel-snap
         nx = Math.round(nx);
         ny = Math.round(ny);
+
+        // Ctrl = pixel collision
+        if ((e.ctrlKey || e.metaKey) && ss) {
+          const resolved = resolveCollision(obj.x, obj.y, nx, ny, ss, obj.animationIndex);
+          nx = resolved.x;
+          ny = resolved.y;
+        }
+
         updateObject(selectedObjectLayerId, selectedObjectId, { x: nx, y: ny });
         return;
       }
@@ -433,6 +675,12 @@ export default function MapCanvas() {
           for (let x = 0; x < mapWidth; x++) {
             const tile = layer.data[y]?.[x];
             if (!tile) continue;
+            // Color cell
+            if (tile.color) {
+              ctx.fillStyle = tile.color;
+              ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+              continue;
+            }
             const img = imageCache[tile.tilesetId];
             const ts = tilesets.find((t) => t.id === tile.tilesetId);
             if (!img || !ts) continue;
@@ -465,7 +713,9 @@ export default function MapCanvas() {
           const anim = ss.animations[obj.animationIndex] || ss.animations[0];
           if (!anim) continue;
 
-          const frame = anim.frameCount > 1 ? animTime % anim.frameCount : 0;
+          const frame = obj.animate && anim.frameCount > 1
+            ? animTime % anim.frameCount
+            : Math.min(obj.frame || 0, anim.frameCount - 1);
           const sx = frame * ss.frameWidth;
           const sy = anim.row * ss.frameHeight;
           const scaleX = obj.scaleX ?? 1;
@@ -577,6 +827,14 @@ export default function MapCanvas() {
         ctx.strokeStyle = 'rgba(79, 195, 247, 0.8)';
         ctx.lineWidth = 2 / camera.zoom;
         ctx.strokeRect(hoverTile.col * tileSize, hoverTile.row * tileSize, tileSize, tileSize);
+      } else if (activeTool === 'tint') {
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = activeColor;
+        ctx.fillRect(hoverTile.col * tileSize, hoverTile.row * tileSize, tileSize, tileSize);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = activeColor;
+        ctx.lineWidth = 2 / camera.zoom;
+        ctx.strokeRect(hoverTile.col * tileSize, hoverTile.row * tileSize, tileSize, tileSize);
       }
     }
 
@@ -590,13 +848,16 @@ export default function MapCanvas() {
           // Center on cursor
           let px = hoverWorld.x - ss.frameWidth / 2;
           let py = hoverWorld.y - ss.frameHeight / 2;
-          if (snapToGrid) {
-            px = Math.round(px / tileSize) * tileSize;
-            py = Math.round(py / tileSize) * tileSize;
+          if (snapToGrid || shiftHeld) {
+            const snapped = snapToTileCenter(px, py, ss.frameWidth, ss.frameHeight);
+            px = snapped.x;
+            py = snapped.y;
           }
           px = Math.round(px);
           py = Math.round(py);
-          const ghostFrame = anim.frameCount > 1 ? animTime % anim.frameCount : 0;
+          const ghostFrame = activeFrame !== null
+            ? Math.min(activeFrame, anim.frameCount - 1)
+            : (anim.frameCount > 1 ? animTime % anim.frameCount : 0);
           ctx.globalAlpha = 0.5;
           ctx.drawImage(img, ghostFrame * ss.frameWidth, anim.row * ss.frameHeight, ss.frameWidth, ss.frameHeight, px, py, ss.frameWidth, ss.frameHeight);
           ctx.globalAlpha = 1;
@@ -644,8 +905,8 @@ export default function MapCanvas() {
     }
   }, [
     layers, tilesets, spritesheets, imageCache, mapWidth, mapHeight, tileSize, showGrid, camera,
-    hoverTile, hoverWorld, activeTool, selectedTiles, activeTileRuleId, tileRules,
-    activeSpritesheetId, activeAnimationIndex, selectedObjectId, snapToGrid, canvasSize, animTime, rectDrag,
+    hoverTile, hoverWorld, activeTool, activeColor, selectedTiles, activeTileRuleId, tileRules,
+    activeSpritesheetId, activeAnimationIndex, activeFrame, selectedObjectId, snapToGrid, canvasSize, animTime, rectDrag, shiftHeld, snapToTileCenter,
   ]);
 
   // Resize observer + center view
@@ -688,7 +949,7 @@ export default function MapCanvas() {
     if (cursorOverride) return 'grab';
     if (activeTool === 'select') return isDraggingObject ? 'grabbing' : 'default';
     if (activeTool === 'object') return 'crosshair';
-    if (['brush', 'eraser', 'fill'].includes(activeTool)) return 'crosshair';
+    if (['brush', 'eraser', 'fill', 'tint'].includes(activeTool)) return 'crosshair';
     return 'default';
   };
 
@@ -711,7 +972,63 @@ export default function MapCanvas() {
           setPanStart(null);
         }}
         onWheel={handleWheel}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          // On macOS, Ctrl+Click fires contextmenu instead of mousedown.
+          // Handle Ctrl placement/selection here.
+          if ((e.ctrlKey || e.metaKey) && (activeTool === 'object' || activeTool === 'select')) {
+            const world = screenToWorld(e.clientX, e.clientY);
+            if (!world) return;
+
+            if (activeTool === 'object') {
+              const ss = spritesheets.find((s) => s.id === activeSpritesheetId);
+              if (!ss || !ss.animations[activeAnimationIndex]) return;
+              let px = world.x - ss.frameWidth / 2;
+              let py = world.y - ss.frameHeight / 2;
+              if (e.shiftKey || snapToGrid) {
+                const snapped = snapToTileCenter(px, py, ss.frameWidth, ss.frameHeight);
+                px = snapped.x;
+                py = snapped.y;
+              }
+              px = Math.round(px);
+              py = Math.round(py);
+              if (checkPixelCollision(px, py, ss, activeAnimationIndex)) {
+                let best = null;
+                let bestDist = Infinity;
+                for (let offset = 1; offset <= 200; offset++) {
+                  for (const c of [
+                    { x: px, y: py - offset },
+                    { x: px, y: py + offset },
+                    { x: px - offset, y: py },
+                    { x: px + offset, y: py },
+                  ]) {
+                    if (!checkPixelCollision(c.x, c.y, ss, activeAnimationIndex) && offset < bestDist) {
+                      bestDist = offset;
+                      best = c;
+                    }
+                  }
+                  if (best) break;
+                }
+                if (!best) return;
+                px = Math.round(best.x);
+                py = Math.round(best.y);
+              }
+              pushHistory();
+              placeObject({
+                id: `obj-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                spritesheetId: ss.id,
+                x: px,
+                y: py,
+                animationIndex: activeAnimationIndex,
+                frame: activeFrame ?? 0,
+                animate: activeFrame === null,
+                scaleX: 1,
+                scaleY: 1,
+                name: ss.animations[activeAnimationIndex].name,
+              });
+            }
+          }
+        }}
       />
     </div>
   );
