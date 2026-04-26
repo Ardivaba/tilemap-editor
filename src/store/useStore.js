@@ -94,6 +94,7 @@ const useStore = create(
           locked: false,
           collision: false,
           data: createEmptyGrid(DEFAULT_MAP_WIDTH, DEFAULT_MAP_HEIGHT),
+          objects: [],
         },
       ],
       activeLayerId: 'layer-1',
@@ -104,8 +105,16 @@ const useStore = create(
       editingRuleId: null,
       editingSlotIndex: 0,
 
+      // Spritesheets & Objects
+      spritesheets: [],
+      activeSpritesheetId: null,
+      activeAnimationIndex: 0,
+      selectedObjectId: null,
+      selectedObjectLayerId: null,
+      snapToGrid: false,
+
       // Tools
-      activeTool: 'brush', // brush, eraser, fill, select
+      activeTool: 'brush', // brush, eraser, fill, object, select
       showGrid: true,
 
       // History (not persisted separately - handled via middleware exclusion)
@@ -123,7 +132,7 @@ const useStore = create(
               newData[y][x] = layer.data[y][x];
             }
           }
-          return { ...layer, data: newData };
+          return { ...layer, data: newData, objects: layer.objects || [] };
         });
         set({ mapWidth: width, mapHeight: height, layers });
       },
@@ -189,6 +198,7 @@ const useStore = create(
           locked: false,
           collision: false,
           data: createEmptyGrid(state.mapWidth, state.mapHeight),
+          objects: [],
         };
         set({ layers: [...state.layers, newLayer], activeLayerId: id });
       },
@@ -266,6 +276,7 @@ const useStore = create(
         const snapshot = state.layers.map((l) => ({
           ...l,
           data: l.data.map((row) => [...row]),
+          objects: (l.objects || []).map((o) => ({ ...o })),
         }));
         const history = state.history.slice(0, state.historyIndex + 1);
         history.push(snapshot);
@@ -280,6 +291,7 @@ const useStore = create(
         const snapshot = state.history[newIndex].map((l) => ({
           ...l,
           data: l.data.map((row) => [...row]),
+          objects: (l.objects || []).map((o) => ({ ...o })),
         }));
         set({ layers: snapshot, historyIndex: newIndex });
       },
@@ -291,6 +303,7 @@ const useStore = create(
         const snapshot = state.history[newIndex].map((l) => ({
           ...l,
           data: l.data.map((row) => [...row]),
+          objects: (l.objects || []).map((o) => ({ ...o })),
         }));
         set({ layers: snapshot, historyIndex: newIndex });
       },
@@ -409,6 +422,80 @@ const useStore = create(
             r.id === id ? { ...r, name } : r
           ),
         }));
+      },
+
+      // Spritesheet management
+      addSpritesheet: (spritesheet) => {
+        set((state) => ({
+          spritesheets: [...state.spritesheets, spritesheet],
+          activeSpritesheetId: spritesheet.id,
+          activeAnimationIndex: 0,
+        }));
+      },
+
+      removeSpritesheet: (id) => {
+        set((state) => ({
+          spritesheets: state.spritesheets.filter((s) => s.id !== id),
+          activeSpritesheetId:
+            state.activeSpritesheetId === id
+              ? state.spritesheets.find((s) => s.id !== id)?.id || null
+              : state.activeSpritesheetId,
+        }));
+      },
+
+      setActiveSpritesheet: (id) => set({ activeSpritesheetId: id, activeAnimationIndex: 0 }),
+      setActiveAnimationIndex: (index) => set({ activeAnimationIndex: index }),
+      toggleSnapToGrid: () => set((state) => ({ snapToGrid: !state.snapToGrid })),
+
+      // Object management
+      placeObject: (obj) => {
+        const state = get();
+        const layer = state.layers.find((l) => l.id === state.activeLayerId);
+        if (!layer || layer.locked) return;
+        set({
+          layers: state.layers.map((l) =>
+            l.id === state.activeLayerId
+              ? { ...l, objects: [...(l.objects || []), obj] }
+              : l
+          ),
+          selectedObjectId: obj.id,
+          selectedObjectLayerId: state.activeLayerId,
+        });
+      },
+
+      removeObject: (layerId, objId) => {
+        set((state) => ({
+          layers: state.layers.map((l) =>
+            l.id === layerId
+              ? { ...l, objects: (l.objects || []).filter((o) => o.id !== objId) }
+              : l
+          ),
+          selectedObjectId: state.selectedObjectId === objId ? null : state.selectedObjectId,
+          selectedObjectLayerId: state.selectedObjectId === objId ? null : state.selectedObjectLayerId,
+        }));
+      },
+
+      updateObject: (layerId, objId, changes) => {
+        set((state) => ({
+          layers: state.layers.map((l) =>
+            l.id === layerId
+              ? {
+                  ...l,
+                  objects: (l.objects || []).map((o) =>
+                    o.id === objId ? { ...o, ...changes } : o
+                  ),
+                }
+              : l
+          ),
+        }));
+      },
+
+      selectObject: (objId, layerId) => {
+        set({ selectedObjectId: objId, selectedObjectLayerId: layerId });
+      },
+
+      deselectObject: () => {
+        set({ selectedObjectId: null, selectedObjectLayerId: null });
       },
 
       // Painting
@@ -662,6 +749,12 @@ const useStore = create(
           activeTileRuleId: null,
           editingRuleId: null,
           editingSlotIndex: 0,
+          spritesheets: [],
+          activeSpritesheetId: null,
+          activeAnimationIndex: 0,
+          selectedObjectId: null,
+          selectedObjectLayerId: null,
+          snapToGrid: false,
           layers: [
             {
               id: 'layer-1',
@@ -670,6 +763,7 @@ const useStore = create(
               locked: false,
               collision: false,
               data: createEmptyGrid(DEFAULT_MAP_WIDTH, DEFAULT_MAP_HEIGHT),
+              objects: [],
             },
           ],
           activeLayerId: 'layer-1',
@@ -694,6 +788,9 @@ const useStore = create(
         showGrid: state.showGrid,
         tileRules: state.tileRules,
         activeTileRuleId: state.activeTileRuleId,
+        spritesheets: state.spritesheets,
+        activeSpritesheetId: state.activeSpritesheetId,
+        snapToGrid: state.snapToGrid,
       }),
     }
   )

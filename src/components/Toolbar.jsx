@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import JSZip from 'jszip';
 import useStore from '../store/useStore';
 
 export default function Toolbar() {
@@ -16,6 +17,14 @@ export default function Toolbar() {
   const newProject = useStore((s) => s.newProject);
   const layers = useStore((s) => s.layers);
   const tilesets = useStore((s) => s.tilesets);
+  const spritesheets = useStore((s) => s.spritesheets);
+  const snapToGrid = useStore((s) => s.snapToGrid);
+  const toggleSnapToGrid = useStore((s) => s.toggleSnapToGrid);
+  const addTileset = useStore((s) => s.addTileset);
+  const addSpritesheet = useStore((s) => s.addSpritesheet);
+
+  const zipInputRef = useRef(null);
+  const [importing, setImporting] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
   const [widthInput, setWidthInput] = useState(mapWidth);
@@ -26,6 +35,8 @@ export default function Toolbar() {
     { id: 'brush', label: 'B', title: 'Brush (B)' },
     { id: 'eraser', label: 'E', title: 'Eraser (E)' },
     { id: 'fill', label: 'F', title: 'Fill (F)' },
+    { id: 'object', label: 'O', title: 'Place Object (O)' },
+    { id: 'select', label: 'V', title: 'Select/Move (V)' },
   ];
 
   const applySettings = () => {
@@ -37,6 +48,116 @@ export default function Toolbar() {
     setShowSettings(false);
   };
 
+  const importZip = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const zip = await JSZip.loadAsync(file);
+
+      // Collect all png files and their potential json sidecars
+      const pngFiles = {};
+      const jsonFiles = {};
+
+      zip.forEach((path, entry) => {
+        if (entry.dir) return;
+        const lower = path.toLowerCase();
+        if (lower.endsWith('.png')) {
+          pngFiles[path] = entry;
+        } else if (lower.endsWith('.json')) {
+          jsonFiles[path] = entry;
+        }
+      });
+
+      let tilesetCount = 0;
+      let spritesheetCount = 0;
+
+      for (const [pngPath, pngEntry] of Object.entries(pngFiles)) {
+        const jsonPath = pngPath.replace(/\.png$/i, '.json');
+        const jsonEntry = jsonFiles[jsonPath];
+
+        // Read image as data URL
+        const blob = await pngEntry.async('blob');
+        const dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.readAsDataURL(blob);
+        });
+
+        // Load image to get dimensions
+        const img = await new Promise((resolve) => {
+          const i = new Image();
+          i.onload = () => resolve(i);
+          i.src = dataUrl;
+        });
+
+        const baseName = pngPath.split('/').pop().replace(/\.png$/i, '');
+
+        if (jsonEntry) {
+          // Has JSON sidecar → spritesheet
+          const jsonText = await jsonEntry.async('text');
+          let meta;
+          try { meta = JSON.parse(jsonText); } catch { meta = null; }
+
+          const fw = meta?.frameWidth || 32;
+          const fh = meta?.frameHeight || 32;
+          const cols = Math.floor(img.width / fw);
+          const rows = Math.floor(img.height / fh);
+          const animations = meta?.animations
+            ? meta.animations.map((a) => ({
+                name: a.name,
+                row: a.row,
+                frameCount: Math.min(a.frameCount, cols),
+              }))
+            : Array.from({ length: rows }, (_, r) => ({
+                name: `Animation ${r + 1}`,
+                row: r,
+                frameCount: cols,
+              }));
+
+          addSpritesheet({
+            id: `ss-${Date.now()}-${spritesheetCount}`,
+            name: baseName,
+            dataUrl,
+            imageWidth: img.width,
+            imageHeight: img.height,
+            frameWidth: fw,
+            frameHeight: fh,
+            cols,
+            rows,
+            animations,
+          });
+          spritesheetCount++;
+        } else {
+          // No JSON → tileset/tilemap
+          // Try to parse tile size from filename like "Terrain (32x32).png"
+          const sizeMatch = baseName.match(/\((\d+)x(\d+)\)/);
+          const tw = sizeMatch ? parseInt(sizeMatch[1]) : tileSize;
+          const th = sizeMatch ? parseInt(sizeMatch[2]) : tileSize;
+
+          addTileset({
+            id: `tileset-${Date.now()}-${tilesetCount}`,
+            name: baseName,
+            dataUrl,
+            tileWidth: tw,
+            tileHeight: th,
+            imageWidth: img.width,
+            imageHeight: img.height,
+            cols: Math.floor(img.width / tw),
+            rows: Math.floor(img.height / th),
+          });
+          tilesetCount++;
+        }
+      }
+
+      alert(`Imported ${tilesetCount} tilesets and ${spritesheetCount} spritesheets.`);
+    } catch (err) {
+      alert(`Import failed: ${err.message}`);
+    } finally {
+      setImporting(false);
+      if (zipInputRef.current) zipInputRef.current.value = '';
+    }
+  };
+
   const exportJSON = () => {
     const data = {
       mapWidth,
@@ -46,6 +167,16 @@ export default function Toolbar() {
         name: l.name,
         collision: l.collision,
         data: l.data,
+        objects: (l.objects || []).map((o) => ({
+          name: o.name,
+          spritesheetId: o.spritesheetId,
+          x: o.x,
+          y: o.y,
+          animationIndex: o.animationIndex,
+          frame: o.frame,
+          scaleX: o.scaleX,
+          scaleY: o.scaleY,
+        })),
       })),
       tilesets: tilesets.map((ts) => ({
         name: ts.name,
@@ -53,6 +184,14 @@ export default function Toolbar() {
         tileHeight: ts.tileHeight,
         cols: ts.cols,
         rows: ts.rows,
+      })),
+      spritesheets: spritesheets.map((ss) => ({
+        name: ss.name,
+        frameWidth: ss.frameWidth,
+        frameHeight: ss.frameHeight,
+        cols: ss.cols,
+        rows: ss.rows,
+        animations: ss.animations,
       })),
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
@@ -137,6 +276,21 @@ export default function Toolbar() {
         >
           New
         </button>
+        <button
+          className="toolbar-btn import-btn"
+          onClick={() => zipInputRef.current?.click()}
+          disabled={importing}
+          title="Import asset zip (PNG + JSON sidecars)"
+        >
+          {importing ? '...' : 'Import'}
+        </button>
+        <input
+          ref={zipInputRef}
+          type="file"
+          accept=".zip"
+          style={{ display: 'none' }}
+          onChange={(e) => importZip(e.target.files[0])}
+        />
       </div>
 
       <div className="toolbar-separator" />
@@ -180,6 +334,13 @@ export default function Toolbar() {
           title="Toggle Grid (G)"
         >
           Grid
+        </button>
+        <button
+          className={`toolbar-btn ${snapToGrid ? 'active' : ''}`}
+          onClick={toggleSnapToGrid}
+          title="Snap Objects to Grid"
+        >
+          Snap
         </button>
         <button
           className="toolbar-btn"

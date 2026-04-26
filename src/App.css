@@ -107,6 +107,15 @@ html, body, #root {
   color: var(--success);
 }
 
+.import-btn {
+  color: var(--accent);
+}
+
+.import-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
 .toolbar-right {
   margin-left: auto;
 }
@@ -213,7 +222,7 @@ html, body, #root {
   flex-shrink: 0;
 }
 
-/* ===== Left Panel (Tileset + Rules) ===== */
+/* ===== Left Panel (Tileset + Rules / Objects) ===== */
 .left-panel {
   width: 280px;
   min-width: 220px;
@@ -221,6 +230,46 @@ html, body, #root {
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
+}
+
+.left-panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* ===== Right Panel ===== */
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
 }
 
 /* ===== Tileset Panel ===== */
@@ -390,7 +439,9 @@ html, body, #root {
   width: 240px;
   min-width: 200px;
   border-right: none;
-  border-left: 1px solid var(--border);
+  border-left: none;
+  flex: 1;
+  min-height: 0;
 }
 
 .layer-list {
@@ -506,6 +557,195 @@ html, body, #root {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* ===== Spritesheet Panel ===== */
+.spritesheet-panel {
+  flex: 1;
+  min-height: 0;
+  border-right: none;
+}
+
+.animation-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.animation-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.15s;
+}
+
+.animation-item:hover {
+  background: var(--bg-hover);
+}
+
+.animation-item.active {
+  background: var(--accent-dim);
+  border-color: rgba(79, 195, 247, 0.3);
+}
+
+.animation-preview-canvas {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-primary);
+}
+
+.animation-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.animation-name-input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.animation-name-input:focus {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+}
+
+.animation-meta {
+  margin-top: 2px;
+}
+
+.animation-meta label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.animation-meta input {
+  width: 36px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-family: monospace;
+}
+
+/* ===== Object Properties Panel ===== */
+.object-properties {
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.obj-props-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.obj-props-body label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.obj-props-body input[type="text"],
+.obj-props-body input[type="number"],
+.obj-props-body select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.obj-props-body select {
+  cursor: pointer;
+}
+
+.prop-row {
+  display: flex;
+  gap: 6px;
+}
+
+.prop-row label {
+  flex: 1;
+}
+
+.prop-hint {
+  color: var(--text-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.flip-row {
+  gap: 4px;
+}
+
+.flip-btn {
+  flex: 1;
+  padding: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.flip-btn.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.flip-btn:hover {
+  border-color: var(--accent);
+}
+
+.delete-object-btn {
+  width: 100%;
+  padding: 5px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  margin-top: 4px;
+}
+
+.delete-object-btn:hover {
+  background: rgba(255, 107, 107, 0.25);
 }
 
 /* ===== Tile Rule Editor ===== */

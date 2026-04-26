@@ -284,6 +284,25 @@ def create_spritesheet(sprite_obj, output_dir):
 
     sheet.save(out_path, "PNG")
 
+    # Write sidecar JSON with animation metadata
+    import json
+
+    meta = {
+        "frameWidth": max_w,
+        "frameHeight": max_h,
+        "animations": [],
+    }
+    for row_idx, anim in enumerate(animations):
+        meta["animations"].append({
+            "name": anim["name"],
+            "row": row_idx,
+            "frameCount": len(anim["frames"]),
+        })
+
+    json_path = os.path.splitext(out_path)[0] + ".json"
+    with open(json_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
     # Build animation metadata summary
     anim_info = []
     for anim in animations:
