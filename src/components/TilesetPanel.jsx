@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import useStore from '../store/useStore';
+import AssetPicker from './AssetPicker';
 
 export default function TilesetPanel() {
   const tilesets = useStore((s) => s.tilesets);
@@ -278,34 +279,15 @@ export default function TilesetPanel() {
         </div>
       </div>
 
-      {/* Tileset tabs */}
+      {/* Tileset selector */}
       {tilesets.length > 0 && (
-        <div className="tileset-tabs">
-          {tilesets.map((ts) => (
-            <div
-              key={ts.id}
-              className={`tileset-tab ${
-                ts.id === activeTilesetId ? 'active' : ''
-              }`}
-              onClick={() => setActiveTileset(ts.id)}
-            >
-              <span className="tab-name" title={ts.name}>
-                {ts.name.length > 12
-                  ? ts.name.slice(0, 12) + '...'
-                  : ts.name}
-              </span>
-              <button
-                className="tab-close"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeTileset(ts.id);
-                }}
-              >
-                x
-              </button>
-            </div>
-          ))}
-        </div>
+        <AssetPicker
+          items={tilesets}
+          activeId={activeTilesetId}
+          onSelect={setActiveTileset}
+          onRemove={removeTileset}
+          label="tileset"
+        />
       )}
 
       {/* Tile grid */}

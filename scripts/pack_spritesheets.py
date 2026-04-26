@@ -89,10 +89,76 @@ def load_frames(directory):
         path = os.path.join(directory, f)
         try:
             img = Image.open(path).convert("RGBA")
-            frames.append(img)
+            frames.append((f, img))
         except Exception as e:
             print(f"  Warning: could not load {path}: {e}")
     return frames
+
+
+def get_base_name(filename):
+    """Extract the base name from a frame filename, stripping trailing numbers.
+
+    'Idle Sword 01.png' -> 'Idle Sword'
+    'Small Cloud 3.png' -> 'Small Cloud'
+    '01.png' -> ''
+    'BG Image.png' -> 'BG Image'
+    """
+    name = os.path.splitext(filename)[0]
+    # Strip trailing numbers and separators
+    stripped = re.sub(r"[\s_-]*\d+$", "", name)
+    return stripped
+
+
+def group_frames_as_animations(directory):
+    """Load frames from a directory and decide whether they form one animation
+    or multiple distinct sprites.
+
+    Returns a list of animation dicts:
+        [{"name": "...", "frames": [<PIL.Image>, ...]}, ...]
+
+    Heuristic: if frames have different sizes OR have multiple distinct base
+    names (more than just numbered variants), treat each unique base name as
+    a separate animation group. Within each group, if all frames are the same
+    size they're an animation; if sizes differ, each frame is its own entry.
+    """
+    raw = load_frames(directory)
+    if not raw:
+        return []
+
+    # Group by base name
+    groups = {}
+    for fname, img in raw:
+        base = get_base_name(fname)
+        if base not in groups:
+            groups[base] = []
+        groups[base].append((fname, img))
+
+    # If there's only one group -> treat as one animation (even if sizes differ,
+    # since the packer will pad to max size anyway)
+    if len(groups) == 1:
+        key = list(groups.keys())[0]
+        imgs = [img for _, img in groups[key]]
+        return [{"name": key or os.path.basename(directory), "frames": imgs}]
+
+    # Multiple groups -> each group is a separate entry
+    result = []
+    for base, items in sorted(groups.items(), key=lambda x: natural_sort_key(x[0])):
+        # Skip guide images
+        if "(guide)" in base.lower():
+            continue
+        if len(items) > 1:
+            # Multiple frames with the same base name = animation or variant set
+            result.append({"name": base or os.path.basename(directory),
+                           "frames": [img for _, img in items]})
+        else:
+            # Single frame
+            fname, img = items[0]
+            entry_name = os.path.splitext(fname)[0]
+            if "(guide)" in entry_name.lower():
+                continue
+            result.append({"name": entry_name, "frames": [img]})
+
+    return result
 
 
 def find_sprite_objects(root_dir):
@@ -153,14 +219,14 @@ def _walk_sprites(directory, category, objects, prefix=""):
     has_subdirs = len(subdirs) > 0
 
     if has_pngs and not has_subdirs:
-        # Leaf directory with PNGs → single animation object
+        # Leaf directory with PNGs → use smart grouping
         name = prefix or os.path.basename(directory)
-        frames = load_frames(directory)
-        if frames:
+        animations = group_frames_as_animations(directory)
+        if animations:
             objects.append({
                 "name": name,
                 "category": category,
-                "animations": [{"name": name, "frames": frames}],
+                "animations": animations,
             })
         return
 
@@ -191,15 +257,24 @@ def _walk_sprites(directory, category, objects, prefix=""):
             animations = []
             for sd in sorted(anim_subdirs, key=anim_sort_key):
                 sd_path = os.path.join(directory, sd)
-                frames = load_frames(sd_path)
-                if frames:
-                    animations.append({"name": sd, "frames": frames})
+                # Each subdir is one animation - use smart grouping in case
+                # the subdir contains mixed sprites too
+                sub_anims = group_frames_as_animations(sd_path)
+                if len(sub_anims) == 1:
+                    # Single animation from this subdir - use the subdir name
+                    sub_anims[0]["name"] = sd
+                    animations.extend(sub_anims)
+                elif sub_anims:
+                    # Multiple groups found - prefix with subdir name
+                    for sa in sub_anims:
+                        sa["name"] = f"{sd} - {sa['name']}" if sa["name"] != sd else sd
+                    animations.extend(sub_anims)
 
-            # Also include any PNGs at this level as a "base" animation
+            # Also include any PNGs at this level
             if has_pngs:
-                frames = load_frames(directory)
-                if frames:
-                    animations.insert(0, {"name": obj_name, "frames": frames})
+                level_anims = group_frames_as_animations(directory)
+                for la in level_anims:
+                    animations.insert(0, la)
 
             if animations:
                 objects.append({
@@ -216,12 +291,12 @@ def _walk_sprites(directory, category, objects, prefix=""):
 
         # If only nested (no anim_subdirs) and we have PNGs at this level too
         if not anim_subdirs and has_pngs:
-            frames = load_frames(directory)
-            if frames:
+            level_anims = group_frames_as_animations(directory)
+            if level_anims:
                 objects.append({
                     "name": obj_name,
                     "category": category,
-                    "animations": [{"name": obj_name, "frames": frames}],
+                    "animations": level_anims,
                 })
 
 

@@ -15,6 +15,8 @@ export default function MapCanvas() {
   const selectedTiles = useStore((s) => s.selectedTiles);
   const activeLayerId = useStore((s) => s.activeLayerId);
   const paintTile = useStore((s) => s.paintTile);
+  const paintRect = useStore((s) => s.paintRect);
+  const eraseRect = useStore((s) => s.eraseRect);
   const pushHistory = useStore((s) => s.pushHistory);
   const activeTileRuleId = useStore((s) => s.activeTileRuleId);
   const tileRules = useStore((s) => s.tileRules);
@@ -43,6 +45,7 @@ export default function MapCanvas() {
   const [dragOffset, setDragOffset] = useState(null);
   const [animTime, setAnimTime] = useState(0);
   const spaceHeld = useRef(false);
+  const [rectDrag, setRectDrag] = useState(null); // { startCol, startRow, erase: bool }
 
   // Load tileset + spritesheet images
   useEffect(() => {
@@ -217,6 +220,16 @@ export default function MapCanvas() {
         return;
       }
 
+      // Shift+drag for rect fill/erase (in tile modes)
+      if (e.shiftKey && ['brush', 'eraser', 'fill'].includes(activeTool)) {
+        const tile = screenToTile(e.clientX, e.clientY);
+        if (!tile) return;
+        e.preventDefault();
+        const erase = e.button === 2; // right-click = erase
+        setRectDrag({ startCol: tile.col, startRow: tile.row, erase });
+        return;
+      }
+
       if (e.button !== 0) return;
 
       const world = screenToWorld(e.clientX, e.clientY);
@@ -334,14 +347,32 @@ export default function MapCanvas() {
     [isPanning, isPainting, isDraggingObject, panStart, screenToWorld, screenToTile, activeTool, lastPaintPos, paintTile, selectedObjectId, selectedObjectLayerId, dragOffset, snapToGrid, tileSize, updateObject]
   );
 
-  const handleMouseUp = useCallback(() => {
-    setIsPanning(false);
-    setIsPainting(false);
-    setIsDraggingObject(false);
-    setDragOffset(null);
-    setLastPaintPos(null);
-    setPanStart(null);
-  }, []);
+  const handleMouseUp = useCallback(
+    (e) => {
+      // Finalize rect drag
+      if (rectDrag) {
+        const tile = screenToTile(e.clientX, e.clientY);
+        if (tile) {
+          pushHistory();
+          if (rectDrag.erase) {
+            eraseRect(rectDrag.startCol, rectDrag.startRow, tile.col, tile.row);
+          } else {
+            paintRect(rectDrag.startCol, rectDrag.startRow, tile.col, tile.row);
+          }
+        }
+        setRectDrag(null);
+        return;
+      }
+
+      setIsPanning(false);
+      setIsPainting(false);
+      setIsDraggingObject(false);
+      setDragOffset(null);
+      setLastPaintPos(null);
+      setPanStart(null);
+    },
+    [rectDrag, screenToTile, pushHistory, paintRect, eraseRect]
+  );
 
   const handleWheel = useCallback(
     (e) => {
@@ -576,6 +607,31 @@ export default function MapCanvas() {
       }
     }
 
+    // Rect drag preview
+    if (rectDrag && hoverTile) {
+      const minC = Math.min(rectDrag.startCol, hoverTile.col);
+      const maxC = Math.max(rectDrag.startCol, hoverTile.col);
+      const minR = Math.min(rectDrag.startRow, hoverTile.row);
+      const maxR = Math.max(rectDrag.startRow, hoverTile.row);
+      const rx = minC * tileSize;
+      const ry = minR * tileSize;
+      const rw = (maxC - minC + 1) * tileSize;
+      const rh = (maxR - minR + 1) * tileSize;
+
+      if (rectDrag.erase) {
+        ctx.fillStyle = 'rgba(255, 100, 100, 0.2)';
+        ctx.strokeStyle = 'rgba(255, 100, 100, 0.8)';
+      } else {
+        ctx.fillStyle = 'rgba(79, 195, 247, 0.15)';
+        ctx.strokeStyle = 'rgba(79, 195, 247, 0.8)';
+      }
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.lineWidth = 2 / camera.zoom;
+      ctx.setLineDash([4 / camera.zoom, 4 / camera.zoom]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
+    }
+
     ctx.restore();
 
     // Coordinate display
@@ -589,7 +645,7 @@ export default function MapCanvas() {
   }, [
     layers, tilesets, spritesheets, imageCache, mapWidth, mapHeight, tileSize, showGrid, camera,
     hoverTile, hoverWorld, activeTool, selectedTiles, activeTileRuleId, tileRules,
-    activeSpritesheetId, activeAnimationIndex, selectedObjectId, snapToGrid, canvasSize, animTime,
+    activeSpritesheetId, activeAnimationIndex, selectedObjectId, snapToGrid, canvasSize, animTime, rectDrag,
   ]);
 
   // Resize observer + center view
@@ -645,7 +701,15 @@ export default function MapCanvas() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
+        onMouseLeave={() => {
+          setRectDrag(null);
+          setIsPanning(false);
+          setIsPainting(false);
+          setIsDraggingObject(false);
+          setDragOffset(null);
+          setLastPaintPos(null);
+          setPanStart(null);
+        }}
         onWheel={handleWheel}
         onContextMenu={(e) => e.preventDefault()}
       />

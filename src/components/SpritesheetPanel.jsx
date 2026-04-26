@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import useStore from '../store/useStore';
+import AssetPicker from './AssetPicker';
 
 export default function SpritesheetPanel() {
   const spritesheets = useStore((s) => s.spritesheets);
@@ -194,25 +195,13 @@ export default function SpritesheetPanel() {
       </div>
 
       {spritesheets.length > 0 && (
-        <div className="tileset-tabs">
-          {spritesheets.map((ss) => (
-            <div
-              key={ss.id}
-              className={`tileset-tab ${ss.id === activeSpritesheetId ? 'active' : ''}`}
-              onClick={() => setActiveSpritesheet(ss.id)}
-            >
-              <span className="tab-name" title={ss.name}>
-                {ss.name.length > 12 ? ss.name.slice(0, 12) + '...' : ss.name}
-              </span>
-              <button
-                className="tab-close"
-                onClick={(e) => { e.stopPropagation(); removeSpritesheet(ss.id); }}
-              >
-                x
-              </button>
-            </div>
-          ))}
-        </div>
+        <AssetPicker
+          items={spritesheets}
+          activeId={activeSpritesheetId}
+          onSelect={setActiveSpritesheet}
+          onRemove={removeSpritesheet}
+          label="spritesheet"
+        />
       )}
 
       {activeSpritesheet && (

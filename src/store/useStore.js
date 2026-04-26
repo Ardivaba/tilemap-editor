@@ -498,6 +498,120 @@ const useStore = create(
         set({ selectedObjectId: null, selectedObjectLayerId: null });
       },
 
+      // Rectangle operations
+      eraseRect: (x1, y1, x2, y2) => {
+        const state = get();
+        const layer = state.layers.find((l) => l.id === state.activeLayerId);
+        if (!layer || layer.locked || !layer.visible) return;
+        const minX = Math.max(0, Math.min(x1, x2));
+        const maxX = Math.min(state.mapWidth - 1, Math.max(x1, x2));
+        const minY = Math.max(0, Math.min(y1, y2));
+        const maxY = Math.min(state.mapHeight - 1, Math.max(y1, y2));
+        const newData = layer.data.map((row) => [...row]);
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            newData[y][x] = null;
+          }
+        }
+        set({
+          layers: state.layers.map((l) =>
+            l.id === state.activeLayerId ? { ...l, data: newData } : l
+          ),
+        });
+      },
+
+      paintRect: (x1, y1, x2, y2) => {
+        const state = get();
+        const layer = state.layers.find((l) => l.id === state.activeLayerId);
+        if (!layer || layer.locked || !layer.visible) return;
+        const minX = Math.max(0, Math.min(x1, x2));
+        const maxX = Math.min(state.mapWidth - 1, Math.max(x1, x2));
+        const minY = Math.max(0, Math.min(y1, y2));
+        const maxY = Math.min(state.mapHeight - 1, Math.max(y1, y2));
+        const newData = layer.data.map((row) => [...row]);
+
+        // Tile rule painting
+        if (state.activeTileRuleId) {
+          const rule = state.tileRules.find((r) => r.id === state.activeTileRuleId);
+          if (!rule || rule.slots.length === 0) return;
+
+          const isSameRule = (cx, cy) => {
+            if (cx < 0 || cx >= state.mapWidth || cy < 0 || cy >= state.mapHeight) return false;
+            const t = newData[cy][cx];
+            return t && t.ruleId === rule.id;
+          };
+
+          const resolveSlot = (cx, cy) => {
+            const n = isSameRule(cx, cy - 1), s = isSameRule(cx, cy + 1);
+            const w = isSameRule(cx - 1, cy), e = isSameRule(cx + 1, cy);
+            const nw = isSameRule(cx - 1, cy - 1), ne = isSameRule(cx + 1, cy - 1);
+            const sw = isSameRule(cx - 1, cy + 1), se = isSameRule(cx + 1, cy + 1);
+            const slotByKey = {};
+            for (const slot of rule.slots) slotByKey[slot.key] = slot;
+            if (slotByKey.c) {
+              if (slotByKey.ise && n && w && s && e && !nw) return slotByKey.ise;
+              if (slotByKey.isw && n && w && s && e && !ne) return slotByKey.isw;
+              if (slotByKey.ine && n && w && s && e && !sw) return slotByKey.ine;
+              if (slotByKey.inw && n && w && s && e && !se) return slotByKey.inw;
+              if (!n && !w) return slotByKey.nw || slotByKey.c;
+              if (!n && !e) return slotByKey.ne || slotByKey.c;
+              if (!s && !w) return slotByKey.sw || slotByKey.c;
+              if (!s && !e) return slotByKey.se || slotByKey.c;
+              if (!n) return slotByKey.n || slotByKey.c;
+              if (!s) return slotByKey.s || slotByKey.c;
+              if (!w) return slotByKey.w || slotByKey.c;
+              if (!e) return slotByKey.e || slotByKey.c;
+              return slotByKey.c;
+            }
+            return rule.slots.find((s) => s.tile) || rule.slots[0];
+          };
+
+          // First pass: place all tiles in the rect
+          const fallback = rule.slots.find((s) => s.tile);
+          if (!fallback) return;
+          for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+              newData[y][x] = { ...fallback.tile, ruleId: rule.id };
+            }
+          }
+          // Second pass: resolve all tiles in rect + border neighbors
+          for (let y = minY - 1; y <= maxY + 1; y++) {
+            for (let x = minX - 1; x <= maxX + 1; x++) {
+              if (x < 0 || x >= state.mapWidth || y < 0 || y >= state.mapHeight) continue;
+              if (!newData[y][x] || newData[y][x].ruleId !== rule.id) continue;
+              const slot = resolveSlot(x, y);
+              if (slot && slot.tile) {
+                newData[y][x] = { ...slot.tile, ruleId: rule.id };
+              }
+            }
+          }
+        } else if (state.selectedTiles) {
+          // Regular tile painting - tile the selection across the rect
+          const sel = state.selectedTiles;
+          const selW = sel.endCol - sel.startCol + 1;
+          const selH = sel.endRow - sel.startRow + 1;
+          for (let y = minY; y <= maxY; y++) {
+            for (let x = minX; x <= maxX; x++) {
+              const dx = ((x - minX) % selW);
+              const dy = ((y - minY) % selH);
+              newData[y][x] = {
+                tilesetId: sel.tilesetId,
+                col: sel.startCol + dx,
+                row: sel.startRow + dy,
+              };
+            }
+          }
+        } else {
+          return;
+        }
+
+        set({
+          layers: state.layers.map((l) =>
+            l.id === state.activeLayerId ? { ...l, data: newData } : l
+          ),
+        });
+      },
+
       // Painting
       paintTile: (x, y) => {
         const state = get();
