@@ -678,7 +678,7 @@ export default function MapCanvas() {
             // Color cell
             if (tile.color) {
               ctx.fillStyle = tile.color;
-              ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+              ctx.fillRect(x * tileSize - 0.5, y * tileSize - 0.5, tileSize + 1, tileSize + 1);
               continue;
             }
             const img = imageCache[tile.tilesetId];
